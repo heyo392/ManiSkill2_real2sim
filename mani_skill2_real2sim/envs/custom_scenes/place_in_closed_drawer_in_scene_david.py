@@ -459,6 +459,17 @@ class PlaceIntoClosedBottomDrawerCustomInSceneEnv(
 
 
 class PlaceRetrieveFromDrawerInSceneEnv(PlaceObjectInClosedDrawerInSceneEnv):
+    # "Home" pose and tolerances copied from UROP/mem-aid/data_scripts/oracle_policy.py
+    _HOME_TCP_POS_IN_BASE = np.array([0.439408, -0.218286, 0.961907], dtype=np.float32)
+    _HOME_TCP_QUAT_IN_BASE = np.array(
+        [0.160144, -0.603912, 0.780116, -0.0326108], dtype=np.float32
+    )
+    _HOME_POS_TOL = 0.02
+    _HOME_ANG_TOL = 0.1
+
+    _INSTRUCTION_0 = "pick up cube, place cube into open drawer, and close it"
+    _INSTRUCTION_1 = "go home"
+    _INSTRUCTION_2 = "open drawer containing the cube"
 
     def __init__(
         self,
@@ -498,14 +509,34 @@ class PlaceRetrieveFromDrawerInSceneEnv(PlaceObjectInClosedDrawerInSceneEnv):
         self._completed_task3 = False
         self.episode_stats = OrderedDict(
             phase=0,
+            instruction_id=0,
             inside_any_drawer=False,
             closed_drawer_with_object=False,
+            closed_drawer_with_object_latched=False,
+            at_home=False,
             button_pressed=False,
             retrieved_and_on_top=False,
             cube_in_drawer=-1,
             drawers_closed=[],
             target_drawer_number=-1,
         )
+
+    @staticmethod
+    def _quat_angle(q1: np.ndarray, q2: np.ndarray) -> float:
+        # Quaternion angle between orientations. Assumes (w, x, y, z) ordering.
+        q1 = np.asarray(q1, dtype=np.float64).reshape(4)
+        q2 = np.asarray(q2, dtype=np.float64).reshape(4)
+        dot = float(abs(np.dot(q1, q2)))
+        dot = min(1.0, max(-1.0, dot))
+        return float(2.0 * np.arccos(dot))
+
+    def _is_at_home(self) -> bool:
+        tcp_in_base = self.agent.robot.pose.inv() * self.tcp.pose
+        pos = np.asarray(tcp_in_base.p, dtype=np.float32)
+        quat = np.asarray(tcp_in_base.q, dtype=np.float32)
+        dist = float(np.linalg.norm(pos - self._HOME_TCP_POS_IN_BASE))
+        angle = self._quat_angle(quat, self._HOME_TCP_QUAT_IN_BASE)
+        return (dist < self._HOME_POS_TOL) and (angle < self._HOME_ANG_TOL)
 
     def _get_drawer_link_and_collision(self, drawer_id: str):
         link = get_entity_by_name(self.art_obj.get_links(), f"{drawer_id}_drawer")
@@ -685,7 +716,19 @@ class PlaceRetrieveFromDrawerInSceneEnv(PlaceObjectInClosedDrawerInSceneEnv):
 
         # Cache predicates for debugging
         self.episode_stats["inside_any_drawer"] = inside_any
-        self.episode_stats["closed_drawer_with_object"] = closed_with_object
+        # Keep the original instantaneous meaning of this field.
+        self.episode_stats["closed_drawer_with_object"] = closed_with_object and inside_any
+        # Latch for instruction progression.
+        self.episode_stats["closed_drawer_with_object_latched"] = self.episode_stats[
+            "closed_drawer_with_object_latched"
+        ] or self.episode_stats["closed_drawer_with_object"]
+        self.episode_stats["at_home"] = self.episode_stats["at_home"] or self._is_at_home()
+
+        # Instruction progression (latched): 0 -> 1 when drawer is closed with cube inside; 1 -> 2 when at home.
+        if self.episode_stats["instruction_id"] == 0 and self.episode_stats["closed_drawer_with_object_latched"]:
+            self.episode_stats["instruction_id"] = 1
+        if self.episode_stats["instruction_id"] == 1 and self.episode_stats["at_home"]:
+            self.episode_stats["instruction_id"] = 2
 
         # Phase 2 completion condition
         self.episode_stats["retrieved_and_on_top"] = retrieved_and_on_top
@@ -714,14 +757,12 @@ class PlaceRetrieveFromDrawerInSceneEnv(PlaceObjectInClosedDrawerInSceneEnv):
         return self.compute_dense_reward(**kwargs) / denom
 
     def get_language_instruction(self, **kwargs):
-        if self.cur_subtask_id == 0:
-            model_name = self._get_instruction_obj_name(self.model_id)
-            return f"place {model_name} in a drawer and close it"
-        elif self.cur_subtask_id == 1:
-            return "press the button on top"
-        else:
-            model_name = self._get_instruction_obj_name(self.model_id)
-            return f"retrieve {model_name} and place it on top"
+        instruction_id = int(self.episode_stats.get("instruction_id", 0))
+        if instruction_id == 0:
+            return self._INSTRUCTION_0
+        if instruction_id == 1:
+            return self._INSTRUCTION_1
+        return self._INSTRUCTION_2
 
     def is_final_subtask(self):
         return self.cur_subtask_id == 2
