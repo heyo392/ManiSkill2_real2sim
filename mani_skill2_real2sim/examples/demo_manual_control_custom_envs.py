@@ -41,6 +41,10 @@ python mani_skill2_real2sim/examples/demo_manual_control_custom_envs.py -e Place
     -c arm_pd_ee_delta_pose_align_interpolate_by_planner_gripper_pd_joint_target_delta_pos_interpolate_by_planner -o rgbd \
     --enable-sapien-viewer     prepackaged_config @True     robot google_robot_static   model_ids baked_apple_v2
 
+python mani_skill2_real2sim/examples/demo_manual_control_custom_envs.py -e PlaceRetrieveDrawerCustomInScene-v0 \
+    -c arm_pd_ee_delta_pose_align_interpolate_by_planner_gripper_pd_joint_target_delta_pos_interpolate_by_planner -o rgbd \
+    --enable-sapien-viewer     prepackaged_config @True     robot google_robot_static   model_ids baked_apple_v2
+
 python mani_skill2_real2sim/examples/demo_manual_control_custom_envs.py -e PutCarrotOnPlateInScene-v0 --enable-sapien-viewer \
     -c arm_pd_ee_delta_pose_align2_gripper_pd_joint_pos -o rgbd --enable-sapien-viewer     prepackaged_config @True     robot widowx
 # replace "PutCarrotOnPlateInScene-v0" with "PutSpoonOnTableClothInScene-v0", "StackGreenCubeOnYellowCubeBakedTexInScene-v0", 
@@ -195,6 +199,26 @@ def main():
             #                    'robot_init_options': {'init_xy': [0.36, 0.22], 'init_rot_quat': init_rot_quat}}
 
             env_reset_options["obj_init_options"]["episode_id"] = 0
+        elif names_in_env_id_fxn(["PlaceRetrieveDrawer"]):
+            init_rot_quat = [0, 0, 0, 1]
+            env_reset_options = {
+                "obj_init_options": {"init_xy": [-.1, .13], "qpos" : [0, 0, 0.18]},
+                "robot_init_options": {
+                    "init_xy": [0.652, 0.009],
+                    # "init_rot_quat": init_rot_quat,
+                    # "ee_init_pos": [0.615643, -0.00924772, 0.288744],
+                    # "ee_init_quat": [0.5, -0.5, 0.5, -0.5]
+                    # "qpos": [-0.38458857, 0.13028298, 0.66130143, 1.13140547, -0.01928418, 1.59091294, -1.06210971, -0.00000000, -0.00000000, -0.00285961, 0.7851361]
+                    "qpos":[-8.5642445e-01, -2.0493910e-01,  9.1585898e-01,  2.0823686e+00,
+  1.6215387e-01, -2.9610947e-01, -1.5101631e+00, -1.0000009e-04,
+ -9.9898934e-05, -2.8596099e-03,  7.8513610e-01]
+
+                    
+                    
+    
+                },
+                # "drawer_number": 1,
+            }
         elif names_in_env_id_fxn(["Drawer"]):
             init_rot_quat = [0, 0, 0, 1]
             if not names_in_env_id_fxn(["PlaceInClosedDrawer"]):
@@ -314,6 +338,8 @@ def main():
 
     # print("obj pose", env.obj.pose, "tcp pose", env.tcp.pose)
     print("qpos", env.agent.robot.get_qpos())
+    
+    history = []
 
     while True:
         # -------------------------------------------------------------------------- #
@@ -422,11 +448,19 @@ def main():
         if key == "0":  # switch to SAPIEN viewer
             render_wait()
         elif key == "r":  # reset env
-            obs, info = env.reset(options=env_reset_options)
-            print("Reset info:", info)
+            history = []
+            obs, info = env.reset(options = env_reset_options)
             print("Instruction:", env.get_language_instruction())
             gripper_action = get_reset_gripper_action()
             after_reset = True
+            continue
+        elif key == "m":
+            # Roll back 50 steps by restoring saved qpos
+            history = history[:max(1, len(history) - 10)]
+            target_qpos = history[-1]
+            env.agent.robot.set_qpos(target_qpos)
+            env.agent.robot.set_qvel(np.zeros_like(env.agent.robot.get_qvel()))
+            env.agent.controller.reset()
             continue
         elif key == None:  # exit
             break
@@ -482,14 +516,20 @@ def main():
 
         if is_gripper_delta_target_control:
             gripper_action = 0
+        action_dict = dict(base=base_action, arm=ee_action)
 
-        # print("obj pose", env.obj.pose, "tcp pose", env.tcp.pose)
+        # Record robot qpos for rollback
+        history.append(env.agent.robot.get_qpos().copy())
+
+        print("hisotry written")
         print("tcp pose wrt robot base", env.agent.robot.pose.inv() * env.tcp.pose)
         print("qpos", env.agent.robot.get_qpos())
         print("reward", reward)
         print("terminated", terminated, "truncated", truncated)
         print("info", info)
-
+    print("history saved")
+    print(history)
+    np.save("history.npy", history)
     env.close()
 
 

@@ -6,7 +6,7 @@ from mani_skill2_real2sim.sensors.camera import CameraConfig
 
 
 class GoogleRobotDefaultConfig:
-    def __init__(self, mobile_base=False, finger_friction=2.0, base_arm_drive_mode="force") -> None:
+    def __init__(self, mobile_base=False, finger_friction=1.0, base_arm_drive_mode="force") -> None:
         if mobile_base:
             self.urdf_path = "{PACKAGE_ASSET_DIR}/descriptions/googlerobot_description/google_robot_meta_sim_fix_fingertip.urdf"
         else:

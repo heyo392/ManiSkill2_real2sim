@@ -135,7 +135,27 @@ class CustomSceneEnv(BaseEnv):
     
     def _check_assets(self):
         """Check whether the assets exist."""
-        pass
+        models_dir = self.asset_root / "models"
+        for model_id in self.model_ids:
+            # Allow primitives that are declared in model_db without filesystem assets
+            model_info = self.model_db.get(model_id, {})
+            if isinstance(model_info, dict) and (model_info.get("primitive") is not None):
+                continue
+            model_dir = models_dir / model_id
+            if not model_dir.exists():
+                raise FileNotFoundError(
+                    f"{model_dir} is not found."
+                    "If you installed this repo through 'pip install .', or if you stored the assets outside of ManiSkill2_real2sim/data, "
+                    "you need to set the following environment variable: export MS2_REAL2SIM_ASSET_DIR={path_to_your_ManiSkill2_real2sim_assets} . "
+                    "(for example, you can download this directory https://github.com/simpler-env/ManiSkill2_real2sim/tree/main/data and set the env variable to the downloaded directory). "
+                    "Additionally, for assets in the original ManiSkill2 repo, you can copy the assets into the directory that corresponds to MS2_REAL2SIM_ASSET_DIR."
+                )
+
+            collision_file = model_dir / "collision.obj"
+            if not collision_file.exists():
+                raise FileNotFoundError(
+                    "convex.obj has been renamed to collision.obj. "
+                )
     
     def _load_arena_helper(self, add_collision=True):
         builder = self._scene.create_actor_builder()
@@ -445,6 +465,10 @@ class CustomOtherObjectsInSceneEnv(CustomSceneEnv):
     def _check_assets(self):
         models_dir = self.asset_root / "models"
         for model_id in self.model_ids:
+            # Allow primitives declared in model_db
+            model_info = self.model_db.get(model_id, {})
+            if isinstance(model_info, dict) and (model_info.get("primitive") is not None):
+                continue
             model_dir = models_dir / model_id
             if not model_dir.exists():
                 raise FileNotFoundError(

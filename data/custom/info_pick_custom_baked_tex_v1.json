@@ -69,7 +69,7 @@
     "scales": [
       1.0
     ],
-    "density": 50
+    "density": 100
   },
   "baked_opened_coke_can_v2": {
     "bbox": {
@@ -376,5 +376,16 @@
       1.0
     ],
     "density": 150
+  },
+  "cube": {
+    "primitive": "box",
+    "half_size": [0.033, 0.033, 0.033],
+    "bbox": {
+      "min": [-0.033, -0.033, -0.033],
+      "max": [0.033, 0.033, 0.033]
+    },
+    "scales": [1.0],
+    "density": 500,
+    "color": [0.2, 0.6, 0.9]
   }
 }
