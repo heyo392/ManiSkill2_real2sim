@@ -467,13 +467,16 @@ class PlaceRetrieveFromDrawerInSceneEnv(PlaceObjectInClosedDrawerInSceneEnv):
     _HOME_POS_TOL = 0.02
     _HOME_ANG_TOL = 0.1
 
-    _INSTRUCTION_0 = "pick up cube, place cube into open drawer, and close it"
-    _INSTRUCTION_1 = "go home"
-    _INSTRUCTION_2 = "open drawer containing the cube"
+    _INSTRUCTION_0 = "grab the cube"
+    _INSTRUCTION_1 = "place cube in open drawer"
+    _INSTRUCTION_2 = "close drawer"
+    _INSTRUCTION_3 = "open drawer containing the cube"
 
     def __init__(
         self,
         button_impulse_threshold: float = 1.0,
+        lift_height_threshold: float = 0.03,
+        lift_steps_required: int = 3,
         top_xy_half_extent: Optional[List[float]] = None,
         top_height_offset: float = 0.15,
         **kwargs,
@@ -481,6 +484,9 @@ class PlaceRetrieveFromDrawerInSceneEnv(PlaceObjectInClosedDrawerInSceneEnv):
         self.cur_subtask_id = 0  # 0: place-in, 1: close, 2: retrieve+place-top
         self._button = None
         self._button_impulse_threshold = button_impulse_threshold
+        self._lift_height_threshold = float(lift_height_threshold)
+        self._lift_steps_required = int(lift_steps_required)
+        self._cube_lifted_steps = 0
         # Region on cabinet top in cabinet frame (later converted to world)
         if top_xy_half_extent is None:
             top_xy_half_extent = [0.25, 0.20]
@@ -507,10 +513,12 @@ class PlaceRetrieveFromDrawerInSceneEnv(PlaceObjectInClosedDrawerInSceneEnv):
         self._completed_task1 = False
         self._completed_task2 = False
         self._completed_task3 = False
+        self._cube_lifted_steps = 0
         self.episode_stats = OrderedDict(
             phase=0,
             instruction_id=0,
             inside_any_drawer=False,
+            cube_lifted=False,
             closed_drawer_with_object=False,
             closed_drawer_with_object_latched=False,
             at_home=False,
@@ -700,6 +708,18 @@ class PlaceRetrieveFromDrawerInSceneEnv(PlaceObjectInClosedDrawerInSceneEnv):
         inside_any = placed_any
         retrieved_and_on_top = (not inside_any) and on_top
 
+        baseline_z = getattr(self, "obj_height_after_settle", None)
+        if baseline_z is None:
+            baseline_z = float(self.scene_table_height)
+        cube_lifted_now = float(self.obj.pose.p[2]) > (
+            float(baseline_z) + self._lift_height_threshold
+        )
+        if cube_lifted_now:
+            self._cube_lifted_steps += 1
+        else:
+            self._cube_lifted_steps = 0
+        cube_lifted = self._cube_lifted_steps >= self._lift_steps_required
+
 
         # Phase progression in order: (0) close with object -> (1) press button -> (2) retrieve+place on top
         if self.cur_subtask_id == 0:
@@ -716,6 +736,7 @@ class PlaceRetrieveFromDrawerInSceneEnv(PlaceObjectInClosedDrawerInSceneEnv):
 
         # Cache predicates for debugging
         self.episode_stats["inside_any_drawer"] = inside_any
+        self.episode_stats["cube_lifted"] = self.episode_stats["cube_lifted"] or cube_lifted
         # Keep the original instantaneous meaning of this field.
         self.episode_stats["closed_drawer_with_object"] = closed_with_object and inside_any
         # Latch for instruction progression.
@@ -724,11 +745,22 @@ class PlaceRetrieveFromDrawerInSceneEnv(PlaceObjectInClosedDrawerInSceneEnv):
         ] or self.episode_stats["closed_drawer_with_object"]
         self.episode_stats["at_home"] = self.episode_stats["at_home"] or self._is_at_home()
 
-        # Instruction progression (latched): 0 -> 1 when drawer is closed with cube inside; 1 -> 2 when at home.
-        if self.episode_stats["instruction_id"] == 0 and self.episode_stats["closed_drawer_with_object_latched"]:
+        in_target_drawer = inside_any
+        if self.target_drawer_number in [0, 1, 2]:
+            in_target_drawer = cube_in_drawer == self.target_drawer_number
+
+        # Instruction progression (latched):
+        # 0: grab cube -> 1: place in open drawer -> 2: close drawer -> 3: open drawer containing cube
+        if self.episode_stats["instruction_id"] == 0 and self.episode_stats["cube_lifted"]:
             self.episode_stats["instruction_id"] = 1
-        if self.episode_stats["instruction_id"] == 1 and self.episode_stats["at_home"]:
+        if self.episode_stats["instruction_id"] == 1 and in_target_drawer:
             self.episode_stats["instruction_id"] = 2
+        if (
+            self.episode_stats["instruction_id"] == 2
+            and self.episode_stats["closed_drawer_with_object_latched"]
+            and self.episode_stats["at_home"]
+        ):
+            self.episode_stats["instruction_id"] = 3
 
         # Phase 2 completion condition
         self.episode_stats["retrieved_and_on_top"] = retrieved_and_on_top
@@ -758,11 +790,13 @@ class PlaceRetrieveFromDrawerInSceneEnv(PlaceObjectInClosedDrawerInSceneEnv):
 
     def get_language_instruction(self, **kwargs):
         instruction_id = int(self.episode_stats.get("instruction_id", 0))
-        if instruction_id == 0:
+        if instruction_id <= 0:
             return self._INSTRUCTION_0
         if instruction_id == 1:
             return self._INSTRUCTION_1
-        return self._INSTRUCTION_2
+        if instruction_id == 2:
+            return self._INSTRUCTION_2
+        return self._INSTRUCTION_3
 
     def is_final_subtask(self):
         return self.cur_subtask_id == 2
