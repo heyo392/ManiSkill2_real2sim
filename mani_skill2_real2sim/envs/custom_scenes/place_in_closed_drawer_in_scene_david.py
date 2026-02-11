@@ -471,12 +471,14 @@ class PlaceRetrieveFromDrawerInSceneEnv(PlaceObjectInClosedDrawerInSceneEnv):
     _INSTRUCTION_1 = "place cube in open drawer"
     _INSTRUCTION_2 = "close drawer"
     _INSTRUCTION_3 = "open drawer containing the cube"
+    _OFF_TABLE_IMPULSE_THRESHOLD = 1e-6
+    _OFF_TABLE_STEPS_REQUIRED = 3
 
     def __init__(
         self,
         button_impulse_threshold: float = 1.0,
-        lift_height_threshold: float = 0.03,
-        lift_steps_required: int = 3,
+        off_table_steps_required: int = _OFF_TABLE_STEPS_REQUIRED,
+        off_table_impulse_threshold: float = _OFF_TABLE_IMPULSE_THRESHOLD,
         top_xy_half_extent: Optional[List[float]] = None,
         top_height_offset: float = 0.15,
         **kwargs,
@@ -484,9 +486,11 @@ class PlaceRetrieveFromDrawerInSceneEnv(PlaceObjectInClosedDrawerInSceneEnv):
         self.cur_subtask_id = 0  # 0: place-in, 1: close, 2: retrieve+place-top
         self._button = None
         self._button_impulse_threshold = button_impulse_threshold
-        self._lift_height_threshold = float(lift_height_threshold)
-        self._lift_steps_required = int(lift_steps_required)
-        self._cube_lifted_steps = 0
+        self._off_table_steps_required = int(off_table_steps_required)
+        self._off_table_impulse_threshold = float(off_table_impulse_threshold)
+        self._off_table_steps = 0
+        self._tabletop_link = None
+        self._tabletop_collision = None
         # Region on cabinet top in cabinet frame (later converted to world)
         if top_xy_half_extent is None:
             top_xy_half_extent = [0.25, 0.20]
@@ -513,7 +517,9 @@ class PlaceRetrieveFromDrawerInSceneEnv(PlaceObjectInClosedDrawerInSceneEnv):
         self._completed_task1 = False
         self._completed_task2 = False
         self._completed_task3 = False
-        self._cube_lifted_steps = 0
+        self._off_table_steps = 0
+        self._tabletop_link = None
+        self._tabletop_collision = None
         self.episode_stats = OrderedDict(
             phase=0,
             instruction_id=0,
@@ -607,6 +613,23 @@ class PlaceRetrieveFromDrawerInSceneEnv(PlaceObjectInClosedDrawerInSceneEnv):
                 up_impulse_z += float(np.sum([-p.impulse[2] for p in c.points]))
 
         return up_impulse_z > 1e-6
+
+    def _get_tabletop_link_and_collision(self):
+        if self._tabletop_link is not None and self._tabletop_collision is not None:
+            return self._tabletop_link, self._tabletop_collision
+
+        link = get_entity_by_name(self.art_obj.get_links(), "body")
+        if link is None:
+            return None, None
+        shapes = link.get_collision_shapes()
+        if len(shapes) == 0:
+            return None, None
+
+        # Heuristic: tabletop collision is the collision shape with the largest local z.
+        chosen = max(shapes, key=lambda s: float(s.get_local_pose().p[2]))
+        self._tabletop_link = link
+        self._tabletop_collision = chosen
+        return link, chosen
 
     def _after_simulation_step(self):
         # Button press detection (instantaneous, no teleport)
@@ -708,17 +731,25 @@ class PlaceRetrieveFromDrawerInSceneEnv(PlaceObjectInClosedDrawerInSceneEnv):
         inside_any = placed_any
         retrieved_and_on_top = (not inside_any) and on_top
 
-        baseline_z = getattr(self, "obj_height_after_settle", None)
-        if baseline_z is None:
-            baseline_z = float(self.scene_table_height)
-        cube_lifted_now = float(self.obj.pose.p[2]) > (
-            float(baseline_z) + self._lift_height_threshold
-        )
-        if cube_lifted_now:
-            self._cube_lifted_steps += 1
+        tabletop_link, tabletop_collision = self._get_tabletop_link_and_collision()
+        cube_off_table_now = True
+        if tabletop_link is not None and tabletop_collision is not None:
+            contacts = self._scene.get_contacts()
+            contact_infos = get_pairwise_contacts(
+                contacts,
+                self.obj,
+                tabletop_link,
+                collision_shape1=tabletop_collision,
+            )
+            total_impulse = compute_total_impulse(contact_infos)
+            on_table = np.linalg.norm(total_impulse) > self._off_table_impulse_threshold
+            cube_off_table_now = not on_table
+
+        if cube_off_table_now:
+            self._off_table_steps += 1
         else:
-            self._cube_lifted_steps = 0
-        cube_lifted = self._cube_lifted_steps >= self._lift_steps_required
+            self._off_table_steps = 0
+        cube_lifted = self._off_table_steps >= self._off_table_steps_required
 
 
         # Phase progression in order: (0) close with object -> (1) press button -> (2) retrieve+place on top
