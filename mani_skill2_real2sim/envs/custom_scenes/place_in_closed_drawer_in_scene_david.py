@@ -9,7 +9,6 @@ from mani_skill2_real2sim.utils.registration import register_env
 from mani_skill2_real2sim.utils.sapien_utils import get_entity_by_name
 from transforms3d.euler import euler2quat
 from mani_skill2_real2sim.utils.common import random_choice
-from transforms3d.euler import euler2quat
 from transforms3d.quaternions import axangle2quat, qmult
 from mani_skill2_real2sim.utils.sapien_utils import (
     get_pairwise_contacts,
@@ -61,7 +60,7 @@ class PlaceObjectInClosedDrawerInSceneEnv(OpenDrawerInSceneEnv):
             0.005
         )  # avoid "false-positive" collisions with other objects
         return scene_config
-    
+
     def _set_model(self, model_id, model_scale):
         """Set the model id and scale. If not provided, choose one randomly from self.model_ids."""
         reconfigure = False
