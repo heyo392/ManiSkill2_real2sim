@@ -1,5 +1,5 @@
 # core
-numpy
+numpy==1.26.4
 scipy
 gymnasium>=0.28.1,<1.0
 sapien==2.2.2
